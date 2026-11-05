@@ -277,6 +277,34 @@ export async function startStandalone({
       get catalog() { return [...core.catalog, ...channels.publicModelRows().map(row => ({ ...row, contextWindow: row.context_window, maxOutput: row.max_tokens }))] },
       state: () => ({ ...core.state(), catalog: [...core.catalog, ...channels.publicModelRows()] }),
       publicModelRows: () => [...core.publicModelRows(), ...channels.publicModelRows()],
+      // `testModel` is re-bound rather than spread-copied: the object spread
+      // carries the core closure, whose catalog stops at the free/aggregate
+      // lanes and therefore answers 404 for every account-channel model —
+      // while inference, which reads the overridden `state()` below, serves
+      // those same models fine. Only the admin "测试" action was affected.
+      async testModel(id, effort, options) {
+        if (!channels.handles(id)) return core.testModel(id, effort, options)
+        // The channel worker has no availability store, so the verdict is
+        // persisted here — otherwise a page reload forgets a channel model's
+        // result, while every other lane keeps it. Failures are recorded too:
+        // the admin page shows the upstream's own reason for the last attempt.
+        const persist = (row) => {
+          try {
+            stores.availability.edit(value => ({ ...value, manualResults: { ...value.manualResults, [id]: row } }))
+            stores.availability.flush()
+          } catch (error) {
+            logger.warn?.(`our-free-model standalone: could not persist the ${id} test result (${error.message})`)
+          }
+        }
+        try {
+          const result = await channels.testModel(id, effort, options)
+          persist({ state: 'available', source: 'manual', at: Date.now(), ttftMs: result.ttftMs, latencyMs: result.totalMs })
+          return result
+        } catch (error) {
+          persist({ state: 'unknown', source: 'manual', at: Date.now(), detail: String(error?.message ?? error).slice(0, 200) })
+          throw error
+        }
+      },
       complete: (request, onChunk) => channels.handles(request.model) ? channels.complete(request, onChunk) : core.complete(request, onChunk),
       async refreshCatalog(options) {
         if (stopped) return
