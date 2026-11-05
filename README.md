@@ -764,6 +764,16 @@ DeepSeek Harness 桌面端（Electron 壳）与 DSH Tauri：使用内核提供�
 转发监听仅绑回环地址，且按解析结果绑定（v1.3.2）：localhost 这类主机名先经 dns.lookup 解析、全部结果均为回环才放行，绑定使用解析出的 IP——当 hosts 文件或企业 DNS 将 localhost 指向可路由接口时，校验与监听不再各自为政。
 
 卸载只需移除 bundle 条目，插件不留任何补丁；其数据目录为纯 JSON，可直接删除。
+## 元宝反代（Yuanbao）渠道
+本仓库额外接入了一个**元宝反代**渠道，提供 `yuanbao/` 前缀的模型（deepseek、hunyuan、hy3、hy4 等）。
+
+> ⚠️ **该渠道本身不含元宝协议实现，只是转发入口。**
+> 本地 OpenAI 兼容接口来源于 **[Mao2973464622/yuanbao-openai-api](https://github.com/Mao2973464622/yuanbao-openai-api)**。
+> **必须两个项目一起使用**：先部署并运行 yuanbao-openai-api（监听 `127.0.0.1:8788`），本项目的 `yuanbao/*` 模型才可用；反代未启动时这些模型会全部失败，其余渠道不受影响。
+
+- 接口地址：`http://127.0.0.1:8788/v1`
+- 模型前缀：`yuanbao/`
+- 详细配置、手动接入步骤与排障：[docs/元宝反代接入说明.md](docs/元宝反代接入说明.md)
 
 ## 许可证
 
