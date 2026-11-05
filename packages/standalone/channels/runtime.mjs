@@ -80,6 +80,69 @@ export async function createChannelRuntime({ dataDir, logger = console, stats })
     publicModelRows: () => rows,
     refresh,
     handles: model => providers.some(provider => model.startsWith(`${provider}/`)),
+    /**
+     * 管理页「测试」：渠道模型没有本地 catalog 行，必须走 worker 的真实流式调用。
+     * 判定口径与核心 testModel 一致：正常收尾且有非空正文才算通过。
+     */
+    async testModel(id, effort = undefined, { signal } = {}) {
+      const started = Date.now()
+      let firstFrame
+      let text = ''
+      let sawReasoning = false
+      let finished = false
+      let usage
+      const outcome = { text: '', toolCalls: [], usage: undefined, truncated: false, error: undefined }
+      let first = 0
+      await call('complete', {
+        request: {
+          model: id,
+          messages: [{ role: 'user', content: 'Reply with exactly: OK' }],
+          maxTokens: 256,
+          reasoningEffort: effort,
+        },
+      }, signal, chunk => {
+        if (!first) first = Date.now()
+        const type = chunk?.type
+        if (type === 'text-delta' || type === 'reasoning-delta') {
+          const value = typeof chunk?.text === 'string' ? chunk.text : ''
+          if (value.length > 0 && firstFrame === undefined) firstFrame = Date.now()
+          if (type === 'reasoning-delta' && value.length > 0) sawReasoning = true
+          if (type === 'text-delta') text += value
+        }
+        if (type === 'tool-call-delta' || (type === 'block-end' && chunk?.block?.type === 'tool-call')) {
+          throw Object.assign(new Error('Text test returned an unexpected tool call'), { code: 'SERVER' })
+        }
+        if (type === 'usage') usage = chunk.usage
+        if (type === 'finish') {
+          const reason = chunk.reason ?? {}
+          if (chunk.upstreamFinish !== undefined && !['stop', 'end_turn', 'stop_sequence'].includes(chunk.upstreamFinish)) {
+            throw Object.assign(new Error('Text test did not finish normally: ' + String(chunk.upstreamFinish)), { code: 'SERVER' })
+          }
+          if (reason.kind !== 'stop') {
+            throw Object.assign(new Error(reason.failure?.message ?? reason.kind ?? 'Text test did not finish normally'), { code: reason.failure?.code ?? 'SERVER' })
+          }
+          finished = true
+        }
+        foldForwardOutcome(outcome, chunk)
+      }, 300000)
+      if (!finished) throw Object.assign(new Error('Text test ended without a normal finish'), { code: 'EMPTY_RESPONSE' })
+      if (!text.trim()) throw Object.assign(new Error('Text test returned no response text'), { code: 'EMPTY_RESPONSE' })
+      const ended = Date.now()
+      return {
+        model: id,
+        effort: effort ?? '',
+        ok: true,
+        totalMs: ended - started,
+        latencyMs: ended - started,
+        ttftMs: firstFrame === undefined ? ended - started : firstFrame - started,
+        outputTokens: usage?.outputTokens ?? 0,
+        reasoningTokens: usage?.reasoningTokens ?? 0,
+        tokensPerSecond: null,
+        sample: text.slice(0, 60),
+        text: text.slice(0, 2000),
+        persisted: false,
+      }
+    },
     async rpc(body, signal) {
       if (typeof body?.method !== 'string' || !Object.hasOwn(body, 'payload')) throw Object.assign(new Error('渠道请求缺少 method 或 payload'), { statusCode: 400 })
       return call('rpc', { call: { method: body.method, payload: body.payload } }, signal, undefined, 10 * 60000)
